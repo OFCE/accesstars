@@ -1,0 +1,23 @@
+Package: accesstars
+Type: Package
+Title: Calculation of accessibility from a stars object with r5r
+Version: 0.1.0
+Authors@R: c(
+          person("Maxime", "Parodi", email = "maxime.parodi@sciencespo.fr", role = c("aut", "cre")),
+          person("Xavier", "Timbeau", email = "xavier.timbeau@sciencespo.fr", role = "aut")
+          )
+Description: Calculation of accessibility from a stars object with r5r. Utilities to use r5r with stars objects.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends:
+        R (>= 3.6)
+Imports:
+        data.table,
+        progress,
+        purrr,
+        r5r,
+        rJava,
+        sf,
+        stars,
+        units
+RoxygenNote: 7.1.2
