@@ -3,8 +3,14 @@
 #' @param data Stars object of points with an information on opportunities
 #' @param opportunities_colname Name of the opportunity attribute
 #' @param departures_colname Name of an attribute to filter by, if the value is NA (Optional)
+#' @param scope Max scope in km. Default to NULL, evaluated by max(cutoffs) * speed(mode).
 #' @param r5r_core a rJava object to connect with R5 routing engine
-#' @param stars_result Defaults to TRUE for stars object. Otherwise a data.table.
+#' @param origins,destinations a spatial sf POINT object with WGS84 CRS, or a
+#'                             data.frame containing the columns 'id', 'lon',
+#'                             'lat'.
+#' @param opportunities_colname string. The column name in the `destinations`
+#'        input that tells the number of opportunities in each location.
+#'        Defaults to "opportunities".
 #' @param mode string. Transport modes allowed for the trips. Defaults to
 #'             "WALK". See details for other options.
 #' @param mode_egress string. Transport mode used after egress from public
@@ -97,10 +103,10 @@
 #'
 #' @section remarks : missing values on opportunity are excluded from any calculation, but not tiles with a zero value.
 #' Transforming these values to NA before executing this function may be a good idea.
-st_accessibility <- function(data,
+st_accessibility2 <- function(data,
                              opportunities_colname,
                              departures_colname = NULL,
-                             stars_result = TRUE,
+                             scope = NULL,
                              r5r_core,
                              mode = "WALK", mode_egress = "WALK",
                              departure_datetime = Sys.time(),
@@ -128,6 +134,32 @@ st_accessibility <- function(data,
 
   tictoc::tic()
 
+  # Scope
+  if (is.null(scope)) {
+    dplyr::case_when(speed,
+                     "CAR" %in% mode ~ 60,
+                     "RAIL" %in% mode ~ 40,
+                     "TRANSIT" %in% mode ~ 30,
+                     "BUS" %in% mode ~ 20,
+                     "BIKE" %in% mode ~ 12,
+                     "WALK" %in% mode ~ 5,
+                     TRUE ~ 60)
+    speed <- set_units(speed, km/h)
+    max_time <- set_units(max(cutoffs), min)
+    scope <- speed * max_time
+  }
+
+  scope <- set_units(scope, m)
+  # Assumes resolution in meters.
+  side <- set_units(resolution, m)
+  dimx <- (st_dimensions(data)$x$to - st_dimensions(data)$x$from) + 1L
+  dimy <- (st_dimensions(data)$y$to - st_dimensions(data)$y$from) + 1L
+  area_long <- dimx * side
+  area_large <- dimy * side
+  surf_area <- set_units(area_large * area_long, km^2)
+
+
+
   # Creation of the idINS (crs 3035)
   if(st_crs(data) != st_crs(3035)) {
     idINS <- st_transform(data, crs = st_crs(3035)) |>
@@ -145,89 +177,98 @@ st_accessibility <- function(data,
   crs_ref <- st_crs(4326)
   if (st_crs(data) != crs_ref) data <- st_transform(data, crs = st_crs(4326))
 
+  # Splitting calculation if scope << area_long or area_large
+  nbtiles_scoped <- ceiling(scope / side)
+  Nx <- floor(dimx / nbtiles_scoped) |> drop_units()
+  Ny <- floor(dimy / nbtiles_scoped) |> drop_units()
+
+  if(Nx > 3 | Ny > 3) {
+
+    departs <- cbind(st_coordinates(data),
+                     id = data[["idINS"]] |> as.vector())
+    setDT(departs)
+    setnames(departs, c("x", "y"), c("lon", "lat"))
+
+    # Creation of macro area
+    departs[, ':='(kx = cut(lon, Nx, labels = FALSE),
+                   ky = cut(lat, Ny, labels = FALSE))]
+
+    arrivees <- cbind(departs,
+                      opp = data[[opportunities_colname]] |> as.vector())
+
+    setnames(arrivees, "opp", opportunities_colname)
+
+    # Selection of origins and departures
+    if (!is.null(departures_colname)) {
+      exclure <- data[[departures_colname]] |> as.vector() |> is.na()
+      departs <- departs[!exclure, ]
+    }
+
+    arrivees <- arrivees[!is.na(opportunities_colname),]
+
+    resultat <- data.table()
+
+    for (i in 1:Nx)
+      for (j in 1:Ny) {
+        message("Section ", i, "/", Nx, "-", j, "/", Ny)
+
+        resultat <- rbind(resultat,
+                          r5r::accessibility(r5r_core = r5r_core,
+                                       origins = departs[kx == i & ky == j,],
+                                       destinations = arrivees[kx >= i-1L & kx <= i+1L & ky >= j-1L & ky <= j+1L,],
+                                       opportunities_colname = opportunities_colname,
+                                       mode = mode, mode_egress = mode_egress,
+                                       departure_datetime = departure_datetime,
+                                       time_window = time_window, percentiles = percentiles,
+                                       decay_function = decay_function, cutoffs = cutoffs, decay_value = decay_value,
+                                       max_walk_dist = max_walk_dist, max_bike_dist = max_bike_dist, max_trip_duration = max_trip_duration,
+                                       walk_speed = walk_speed, bike_speed = bike_speed, max_rides = max_rides,
+                                       max_lts = max_lts, n_threads = n_threads, verbose = verbose, progress = progress))
+
+      }
+
+  } else {
+    # Selection of origins
+    departs <- cbind(st_coordinates(data),
+                     data[["idINS"]] |> as.vector())
+
+    names(departs) <- c("lon", "lat", "id")
+
+    if (!is.null(departures_colname)) {
+      exclure <- data[[departures_colname]] |> as.vector() |> is.na()
+      departs <- departs[!exclure, ]
+    }
+
+    # Selection of destinations
+    arrivees <- cbind(st_coordinates(data),
+                      data[["idINS"]] |> as.vector(),
+                      data[[opportunities_colname]] |> as.vector())
+
+    names(arrivees) <- c("lon", "lat", "id", opportunities_colname)
+
+    arrivees <- arrivees[!is.na(opportunities_colname),]
+
+    resultat <- r5r::accessibility(r5r_core = r5r_core,
+                                   origins = departs,
+                                   destinations = arrivees,
+                                   opportunities_colname = opportunities_colname,
+                                   mode = mode, mode_egress = mode_egress,
+                                   departure_datetime = departure_datetime,
+                                   time_window = time_window, percentiles = percentiles,
+                                   decay_function = decay_function, cutoffs = cutoffs, decay_value = decay_value,
+                                   max_walk_dist = max_walk_dist, max_bike_dist = max_bike_dist, max_trip_duration = max_trip_duration,
+                                   walk_speed = walk_speed, bike_speed = bike_speed, max_rides = max_rides,
+                                   max_lts = max_lts, n_threads = n_threads, verbose = verbose, progress = progress)
+  }
+
   # Summary on the area.
-  # Assumes resolution in meters.
-  side <- set_units(resolution, m)
-  surf_area <- (st_dimensions(data)$x$to - st_dimensions(data)$x$from) * (st_dimensions(data)$y$to - st_dimensions(data)$y$from)
-  surf_area <- surf_area * side^2
-  surf_area <- set_units(surf_area, km^2)
   message("Tile's dimension = ", side, "m x ", side, "m")
   message("Area's dimension = ", surf_area, " km^2")
   message("Number of tiles on the area ~ ", ceiling(surf_area/(side^2)))
 
-  # Selection of origins
-  departs <- cbind(st_coordinates(data),
-                   data[["idINS"]] |> as.vector())
-
-  names(departs) <- c("lon", "lat", "id")
-
-  if (!is.null(departures_colname)) {
-    exclure <- data[[departures_colname]] |> as.vector() |> is.na()
-    departs <- departs[!exclure, ]
-  }
-
-  # Selection of destinations
-  arrivees <- cbind(st_coordinates(data),
-                    data[["idINS"]] |> as.vector(),
-                    data[[opportunities_colname]] |> as.vector())
-
-  names(arrivees) <- c("lon", "lat", "id", opportunities_colname)
-
-  arrivees <- arrivees[!is.na(opportunities_colname),]
-
-  resultat <- r5r::accessibility(r5r_core = r5r_core,
-                                 origins = departs,
-                                 destinations = arrivees,
-                                 opportunities_colname = opportunities_colname,
-                                 mode = mode, mode_egress = mode_egress,
-                                 departure_datetime = departure_datetime,
-                                 time_window = time_window, percentiles = percentiles,
-                                 decay_function = decay_function, cutoffs = cutoffs, decay_value = decay_value,
-                                 max_walk_dist = max_walk_dist, max_bike_dist = max_bike_dist, max_trip_duration = max_trip_duration,
-                                 walk_speed = walk_speed, bike_speed = bike_speed, max_rides = max_rides,
-                                 max_lts = max_lts, n_threads = n_threads, verbose = verbose, progress = progress)
-
   tictoc::toc()
 
-  if (stars_result){
-    acc_dt2stars(resultat, cutoffs = cutoffs, percentiles = percentiles, nom = opportunities_colname)
-  } else {
-    resultat
-  }
-}
+  acc_dt2stars(resultat, cutoffs = cutoffs, percentiles = percentiles, nom = opportunities_colname)
 
-#' Transform result of r5r::accessibiliy or st_accessibility from data.table to stars
-#'
-#' @param dt data.table of accessibility
-#' @param cutoffs cutoffs of isochrones
-#' @param percentiles percentiles of time travel
-#' @param nom name of the opportunity which accessibility is evaluated
-#'
-#' @import data.table
-acc_dt2stars <- function(dt, cutoffs, percentiles, nom = "accessibility") {
-
-  grid_noms <- expand.grid(cutoffs, percentiles)
-  names(grid_noms) <- c("cutoffs", "percentiles")
-  if (length(percentiles) == 1) {
-    if(length(cutoffs) == 1) {les_noms <- nom} else {les_noms <- paste0(nom, "_", cutoffs, "mn")}
-  } else {
-    if(length(cutoffs) == 1) {
-      les_noms <- paste0(nom, "_", percentiles, "p")
-    } else {
-      les_noms <- paste0(nom, "_", grid_noms[, 1], "mn_", grid_noms[, 2], "p")
-    }
-  }
-
-  res_stars <- purrr::imap(les_noms, ~ {
-    res <- dt[percentile == grid_noms$percentiles[.y] & cutoff == grid_noms$cutoffs[.y], ][,
-              ':='(percentile = NULL, cutoff = NULL)] |>
-              dt2stars(idINS = "from_id")
-    names(res) <- .x
-    res
-  })
-
-  purrr::reduce(res_stars, c)
 
 }
-
-
