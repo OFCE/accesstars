@@ -105,10 +105,10 @@ residINS <- function(x, idINS = "idINS") {
 #' @export
 idINS2stars <- function(x, crop = NULL, idINS = "idINS", default_res = 200) {
 
-  if (!is.null(crop)) x <- sf::st_crop(x, crop)
+  if (!is.null(crop)) x <- suppressWarnings(sf::st_crop(x, crop))
   if ("sf" %in% class(x)) x <- sf::st_drop_geometry(x)
 
-  xy <- idINS2coord(x[idINS])
+  xy <- idINS2coord(x[[idINS]])
 
   xy_points <- xy |>
     sf::st_multipoint() |>
