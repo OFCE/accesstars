@@ -77,3 +77,56 @@ dt2stars <- function(data, idINS = "idINS")
   data
 }
 
+#' Get the resolution of the data.frame or sf from the idINS column
+#'
+#' @param x a data.frame or sf object with a idINS column.
+#' @param idINS name of the idINS column. default to idINS.
+#'
+#' @export
+residINS <- function(x, idINS = "idINS") {
+
+  if ("sf" %in% class(x)) x <- st_drop_geometry(x)
+
+  na.omit(x[idINS])[1,1] |>
+    gsub(x =_, pattern = "N.+", replacement = "") |>
+    gsub(x =_, pattern = "r", replacement = "") |>
+    as.numeric()
+}
+
+#' Transform a data.frame or a sf with an idINS to a stars object.
+#' It doesn't take into account the geometry of the sf, but the idINS informations.
+#' Assumes crs 3035
+#'
+#' @param x a data.frame or sf object with a idINS column.
+#' @param crop a polygon of interest to crop the stars result.
+#' @param idINS name of the idINS column. Default to idINS.
+#' @param default_res if resolution isn't inscribed in idINS. Default to 200.
+#'
+#' @export
+idINS2stars <- function(x, crop = NULL, idINS = "idINS", default_res = 200) {
+
+  if (!is.null(crop)) x <- sf::st_crop(x, crop)
+  if ("sf" %in% class(x)) x <- sf::st_drop_geometry(x)
+
+  xy <- idINS2coord(x[idINS])
+
+  xy_points <- xy |>
+    sf::st_multipoint() |>
+    sf::st_sfc(crs = st_crs(3035)) |>
+    sf::st_cast(to = "POINT")
+
+  res <- residINS(x)
+  if (is.na(res)) res <- default_res
+
+  bb <- sf::st_bbox(xy_points) + c(xmin = - res/2,
+                                   ymin = - res/2,
+                                   xmax = res/2,
+                                   ymax = res/2)
+
+  template <- stars::st_as_stars(bb, dx = res, dy = res)
+
+  if (!"sf" %in% class(x)) x <- sf::st_as_sf(bind_cols(x, geometry = xy_points))
+
+  stars::st_rasterize(x, template = template)
+
+}

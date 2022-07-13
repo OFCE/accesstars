@@ -3,6 +3,8 @@
 export(coord2idINS)
 export(dt2stars)
 export(idINS2coord)
+export(idINS2stars)
+export(residINS)
 export(st_accessibility)
 export(st_accessibility2)
 export(stars_ref)
