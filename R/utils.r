@@ -54,7 +54,7 @@ idINS2coord <- function(ids, stop_if_res_not_cst = TRUE) {
   res
 }
 
-#' Transform a data.table with idINS to a star object.
+#' Transform a data.table with idINS to a stars object.
 #' Assumes crs 3035
 #'
 #' @param data a data.table with an idINS column
@@ -127,6 +127,28 @@ idINS2stars <- function(x, crop = NULL, idINS = "idINS", default_res = 200) {
 
   if (!"sf" %in% class(x)) x <- sf::st_as_sf(bind_cols(x, geometry = xy_points))
 
+  if (any(map_lgl(x, is.character()))) warning("Attention : les variables de type character sont recodées à la volée lors de la rasterisation.")
+
   stars::st_rasterize(x, template = template)
 
 }
+
+#' Transform a stars object to a data.table with idINS.
+#' Assumes crs 3035
+#'
+#' @param x a stars object
+#' @param resolution default to 200. Size of raster cells which are identified.
+#'
+#' @import data.table
+#'
+#' @export
+stars2dt <- function(x, resolution = 200) {
+
+  idINS <- coord2idINS(st_coordinates(x), resolution = resolution)
+
+  as.data.table(x)[, idINS := idINS][, ':=' (x = NULL, y = NULL)]
+
+}
+
+
+

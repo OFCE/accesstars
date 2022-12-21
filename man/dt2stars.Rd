@@ -2,7 +2,7 @@
 % Please edit documentation in R/utils.r
 \name{dt2stars}
 \alias{dt2stars}
-\title{Transform a data.table with idINS to a star object.
+\title{Transform a data.table with idINS to a stars object.
 Assumes crs 3035}
 \usage{
 dt2stars(data, idINS = "idINS")
@@ -13,6 +13,6 @@ dt2stars(data, idINS = "idINS")
 \item{idINS}{name of the idINS column. Default to idINS.}
 }
 \description{
-Transform a data.table with idINS to a star object.
+Transform a data.table with idINS to a stars object.
 Assumes crs 3035
 }
