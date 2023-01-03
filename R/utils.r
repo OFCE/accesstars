@@ -127,7 +127,7 @@ idINS2stars <- function(x, crop = NULL, idINS = "idINS", default_res = 200) {
 
   if (!"sf" %in% class(x)) x <- sf::st_as_sf(bind_cols(x, geometry = xy_points))
 
-  if (any(map_lgl(x, is.character()))) warning("Attention : les variables de type character sont recodées à la volée lors de la rasterisation.")
+  if (any(map_lgl(select(x, -idINS), is.character))) warning("Attention : les variables de type character sont recodées à la volée lors de la rasterisation.")
 
   stars::st_rasterize(x, template = template)
 
